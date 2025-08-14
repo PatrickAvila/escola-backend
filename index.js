@@ -15,7 +15,8 @@ app.use(cors({
   origin: [
     'http://localhost:3000',
     'http://localhost:5500',
-    'http://127.0.0.1:5500' // Adicione esta linha
+    'http://127.0.0.1:5500',
+    'https://patrickavila.github.io'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
