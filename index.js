@@ -27,14 +27,22 @@ app.use(bodyParser.json());
 let avisos = [];
 let professores = [];
 let galeria = [];
+let adminSenha = '123456';
+let tentativasLogin = {};
 
-// Rota de login (JWT)
+// Rota de login (JWT) com limite de tentativas
 app.post('/login', (req, res) => {
   const { usuario, senha } = req.body;
-  if (usuario === 'diretor' && senha === '123456') {
+  tentativasLogin[usuario] = tentativasLogin[usuario] || 0;
+  if (tentativasLogin[usuario] >= 5) {
+    return res.status(429).json({ error: 'Muitas tentativas. Tente novamente mais tarde.' });
+  }
+  if (usuario === 'diretor' && senha === adminSenha) {
+    tentativasLogin[usuario] = 0;
     const token = jwt.sign({ usuario }, SECRET, { expiresIn: '2h' });
     return res.json({ token });
   }
+  tentativasLogin[usuario]++;
   res.status(401).json({ error: 'Credenciais inválidas.' });
 });
 
@@ -112,6 +120,49 @@ app.delete('/professores/:id', autenticar, (req, res) => {
   res.json({ success: true });
 });
 
+// Destaques
+let destaques = [
+  { texto: "Matrículas abertas para 2025!" },
+  { texto: "Semana do Meio Ambiente – confira as fotos na galeria." },
+  { texto: "Reunião de pais e mestres: 28 de julho." }
+];
+
+app.get('/destaques', (req, res) => {
+  res.json(destaques);
+});
+app.post('/destaques', autenticar, (req, res) => {
+  const { texto } = req.body;
+  if (!texto) return res.status(400).json({ error: 'Texto obrigatório.' });
+  destaques.push({ texto });
+  res.json({ success: true });
+});
+app.put('/destaques/:idx', autenticar, (req, res) => {
+  const { idx } = req.params;
+  const { texto } = req.body;
+  if (!destaques[idx]) return res.status(404).json({ error: 'Destaque não encontrado.' });
+  destaques[idx].texto = texto;
+  res.json({ success: true });
+});
+app.delete('/destaques/:idx', autenticar, (req, res) => {
+  const { idx } = req.params;
+  if (!destaques[idx]) return res.status(404).json({ error: 'Destaque não encontrado.' });
+  destaques.splice(idx, 1);
+  res.json({ success: true });
+});
+
+// Quem Somos
+let quemSomos = "A Escola Antonio Austregésio é referência em educação, formando cidadãos para um futuro melhor.";
+
+app.get('/quem-somos', (req, res) => {
+  res.json({ texto: quemSomos });
+});
+app.put('/quem-somos', autenticar, (req, res) => {
+  const { texto } = req.body;
+  if (!texto) return res.status(400).json({ error: 'Texto obrigatório.' });
+  quemSomos = texto;
+  res.json({ success: true });
+});
+
 // ----------- CRUD Galeria -----------
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -157,6 +208,16 @@ app.delete('/galeria/:id', autenticar, (req, res) => {
 
 // Servir imagens estaticamente
 app.use('/imagens', express.static(path.join(__dirname, '../imagens')));
+
+// ----------- Alterar senha do admin -----------
+app.post('/alterar-senha', autenticar, (req, res) => {
+  const { novaSenha } = req.body;
+  if (!novaSenha || novaSenha.length < 6) {
+    return res.status(400).json({ error: 'Senha muito curta.' });
+  }
+  adminSenha = novaSenha;
+  res.json({ success: true });
+});
 
 // ----------- Contato (envio de e-mail) -----------
 app.post('/contato', async (req, res) => {
