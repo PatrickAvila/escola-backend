@@ -1,267 +1,198 @@
 const express = require('express');
-const nodemailer = require('nodemailer');
 const cors = require('cors');
-const bodyParser = require('body-parser');
+const mongoose = require('mongoose');
 const multer = require('multer');
-const path = require('path');
 const jwt = require('jsonwebtoken');
-require('dotenv').config({ path: './variaveisAmbiente.env' });
-
 const app = express();
-const PORT = 3000;
-const SECRET = 'sua_chave_secreta'; // Troque por uma chave forte!
 
-app.use(cors({
-    origin: [
-        'http://localhost:3000',
-        'http://localhost:5500',
-        'http://127.0.0.1:5500',
-        'https://patrickavila.github.io'
-    ],
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    credentials: true
-}));
-app.use(bodyParser.json());
+app.use(cors());
+app.use(express.json());
+app.use('/uploads', express.static('uploads'));
 
-// ----------- Endpoint para validar token -----------
-app.get('/validar-token', (req, res) => {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader) return res.sendStatus(401);
-    const token = authHeader.split(' ')[1];
-    jwt.verify(token, SECRET, (err) => {
-        if (err) return res.sendStatus(401);
-        res.sendStatus(200);
-    });
+// Conexão MongoDB Atlas
+mongoose.connect('mongodb+srv://admin:patrick123@escola.qxidfn4.mongodb.net/?retryWrites=true&w=majority&appName=escola').then(() => {
+  console.log('Conectado ao MongoDB Atlas!');
+}).catch((err) => {
+  console.error('Erro ao conectar ao MongoDB:', err);
 });
 
-// ----------- Dados em memória -----------
-let avisos = [];
-let professores = [];
-let galeria = [];
-let adminSenha = '123456';
-let tentativasLogin = {};
-let destaques = [
-    { texto: "Matrículas abertas para 2025!" },
-    { texto: "Semana do Meio Ambiente – confira as fotos na galeria." },
-    { texto: "Reunião de pais e mestres: 28 de julho." }
-];
-let quemSomos = "A Escola Antonio Austregésio é referência em educação, formando cidadãos para um futuro melhor.";
+// ----------- Modelos -----------
+const avisoSchema = new mongoose.Schema({ titulo: String, texto: String });
+const Aviso = mongoose.model('Aviso', avisoSchema);
 
-// ----------- Middleware de autenticação -----------
+const professorSchema = new mongoose.Schema({ nome: String, disciplina: String });
+const Professor = mongoose.model('Professor', professorSchema);
+
+const destaqueSchema = new mongoose.Schema({ texto: String });
+const Destaque = mongoose.model('Destaque', destaqueSchema);
+
+const quemSomosSchema = new mongoose.Schema({ texto: String });
+const QuemSomos = mongoose.model('QuemSomos', quemSomosSchema);
+
+const galeriaSchema = new mongoose.Schema({ nome: String, url: String });
+const Galeria = mongoose.model('Galeria', galeriaSchema);
+
+// ----------- Autenticação -----------
+const SECRET = 'sua-chave-secreta'; // Troque por uma chave forte
+
 function autenticar(req, res, next) {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ error: 'Token ausente.' });
-    try {
-        jwt.verify(auth.replace('Bearer ', ''), SECRET);
-        next();
-    } catch {
-        res.status(401).json({ error: 'Token inválido.' });
-    }
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: 'Token ausente.' });
+  const token = auth.split(' ')[1];
+  jwt.verify(token, SECRET, (err, decoded) => {
+    if (err) return res.status(401).json({ error: 'Token inválido.' });
+    req.user = decoded;
+    next();
+  });
 }
 
-// ----------- Login (JWT) com limite de tentativas -----------
-app.post('/login', (req, res) => {
-    const { usuario, senha } = req.body;
-    tentativasLogin[usuario] = tentativasLogin[usuario] || 0;
-    if (tentativasLogin[usuario] >= 5) {
-        return res.status(429).json({ error: 'Muitas tentativas. Tente novamente mais tarde.' });
-    }
-    if (usuario === 'diretor' && senha === adminSenha) {
-        tentativasLogin[usuario] = 0;
-        const token = jwt.sign({ usuario }, SECRET, { expiresIn: '2h' });
-        return res.json({ token });
-    }
-    tentativasLogin[usuario]++;
-    res.status(401).json({ error: 'Credenciais inválidas.' });
+// ----------- CRUD Avisos -----------
+app.get('/avisos', async (req, res) => {
+  const avisos = await Aviso.find();
+  res.json(avisos);
 });
 
-// ----------- CRUD Avisos -----------
-app.get('/avisos', (req, res) => {
-    res.json(avisos);
+app.post('/avisos', autenticar, async (req, res) => {
+  const { titulo, texto } = req.body;
+  if (!titulo || !texto) return res.status(400).json({ error: 'Título e texto são obrigatórios.' });
+  const novoAviso = await Aviso.create({ titulo, texto });
+  res.json(novoAviso);
 });
-app.post('/avisos', autenticar, (req, res) => {
-    const { titulo, texto } = req.body;
-    if (!titulo || !texto) {
-        return res.status(400).json({ error: 'Título e texto são obrigatórios.' });
-    }
-    const novoAviso = { id: Date.now(), titulo, texto };
-    avisos.push(novoAviso);
-    res.json(novoAviso);
+
+app.put('/avisos/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const { titulo, texto } = req.body;
+  const aviso = await Aviso.findById(id);
+  if (!aviso) return res.status(404).json({ error: 'Aviso não encontrado.' });
+  aviso.titulo = titulo;
+  aviso.texto = texto;
+  await aviso.save();
+  res.json(aviso);
 });
-app.put('/avisos/:id', autenticar, (req, res) => {
-    const { id } = req.params;
-    const { titulo, texto } = req.body;
-    const aviso = avisos.find(a => a.id == id);
-    if (!aviso) return res.status(404).json({ error: 'Aviso não encontrado.' });
-    if (!titulo || !texto) return res.status(400).json({ error: 'Título e texto obrigatórios.' });
-    aviso.titulo = titulo;
-    aviso.texto = texto;
-    res.json(aviso);
-});
-app.delete('/avisos/:id', autenticar, (req, res) => {
-    const { id } = req.params;
-    const index = avisos.findIndex(a => a.id == id);
-    if (index === -1) return res.status(404).json({ error: 'Aviso não encontrado.' });
-    avisos.splice(index, 1);
-    res.json({ success: true });
+
+app.delete('/avisos/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const aviso = await Aviso.findByIdAndDelete(id);
+  if (!aviso) return res.status(404).json({ error: 'Aviso não encontrado.' });
+  res.json({ success: true });
 });
 
 // ----------- CRUD Professores -----------
-app.get('/professores', (req, res) => {
-    res.json(professores);
+app.get('/professores', async (req, res) => {
+  const professores = await Professor.find();
+  res.json(professores);
 });
-app.post('/professores', autenticar, (req, res) => {
-    const { nome, disciplina } = req.body;
-    if (!nome || !disciplina) {
-        return res.status(400).json({ error: 'Nome e disciplina são obrigatórios.' });
-    }
-    const novoProfessor = { id: Date.now(), nome, disciplina };
-    professores.push(novoProfessor);
-    res.json(novoProfessor);
+
+app.post('/professores', autenticar, async (req, res) => {
+  const { nome, disciplina } = req.body;
+  if (!nome || !disciplina) return res.status(400).json({ error: 'Nome e disciplina são obrigatórios.' });
+  const novoProfessor = await Professor.create({ nome, disciplina });
+  res.json(novoProfessor);
 });
-app.put('/professores/:id', autenticar, (req, res) => {
-    const { id } = req.params;
-    const { nome, disciplina } = req.body;
-    const prof = professores.find(p => p.id == id);
-    if (!prof) return res.status(404).json({ error: 'Professor não encontrado.' });
-    if (!nome || !disciplina) return res.status(400).json({ error: 'Nome e disciplina obrigatórios.' });
-    prof.nome = nome;
-    prof.disciplina = disciplina;
-    res.json(prof);
+
+app.put('/professores/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const { nome, disciplina } = req.body;
+  const professor = await Professor.findById(id);
+  if (!professor) return res.status(404).json({ error: 'Professor não encontrado.' });
+  professor.nome = nome;
+  professor.disciplina = disciplina;
+  await professor.save();
+  res.json(professor);
 });
-app.delete('/professores/:id', autenticar, (req, res) => {
-    const { id } = req.params;
-    const index = professores.findIndex(p => p.id == id);
-    if (index === -1) return res.status(404).json({ error: 'Professor não encontrado.' });
-    professores.splice(index, 1);
-    res.json({ success: true });
+
+app.delete('/professores/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const professor = await Professor.findByIdAndDelete(id);
+  if (!professor) return res.status(404).json({ error: 'Professor não encontrado.' });
+  res.json({ success: true });
 });
 
 // ----------- CRUD Destaques -----------
-app.get('/destaques', (req, res) => {
-    res.json(destaques);
-});
-app.post('/destaques', autenticar, (req, res) => {
-    const { texto } = req.body;
-    if (!texto) return res.status(400).json({ error: 'Texto obrigatório.' });
-    destaques.push({ texto });
-    res.json({ success: true });
-});
-app.put('/destaques/:idx', autenticar, (req, res) => {
-    const { idx } = req.params;
-    const { texto } = req.body;
-    if (!destaques[idx]) return res.status(404).json({ error: 'Destaque não encontrado.' });
-    destaques[idx].texto = texto;
-    res.json({ success: true });
-});
-app.delete('/destaques/:idx', autenticar, (req, res) => {
-    const { idx } = req.params;
-    if (!destaques[idx]) return res.status(404).json({ error: 'Destaque não encontrado.' });
-    destaques.splice(idx, 1);
-    res.json({ success: true });
+app.get('/destaques', async (req, res) => {
+  const destaques = await Destaque.find();
+  res.json(destaques);
 });
 
-// ----------- Quem Somos -----------
-app.get('/quem-somos', (req, res) => {
-    res.json({ texto: quemSomos });
+app.post('/destaques', autenticar, async (req, res) => {
+  const { texto } = req.body;
+  if (!texto) return res.status(400).json({ error: 'Texto é obrigatório.' });
+  const novoDestaque = await Destaque.create({ texto });
+  res.json(novoDestaque);
 });
-app.put('/quem-somos', autenticar, (req, res) => {
-    const { texto } = req.body;
-    if (!texto) return res.status(400).json({ error: 'Texto obrigatório.' });
-    quemSomos = texto;
-    res.json({ success: true });
+
+app.put('/destaques/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const { texto } = req.body;
+  const destaque = await Destaque.findById(id);
+  if (!destaque) return res.status(404).json({ error: 'Destaque não encontrado.' });
+  destaque.texto = texto;
+  await destaque.save();
+  res.json(destaque);
+});
+
+app.delete('/destaques/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const destaque = await Destaque.findByIdAndDelete(id);
+  if (!destaque) return res.status(404).json({ error: 'Destaque não encontrado.' });
+  res.json({ success: true });
+});
+
+// ----------- CRUD Quem Somos -----------
+app.get('/quem-somos', async (req, res) => {
+  let quem = await QuemSomos.findOne();
+  if (!quem) quem = await QuemSomos.create({ texto: '' });
+  res.json(quem);
+});
+
+app.put('/quem-somos', autenticar, async (req, res) => {
+  const { texto } = req.body;
+  let quem = await QuemSomos.findOne();
+  if (!quem) quem = await QuemSomos.create({ texto });
+  else quem.texto = texto;
+  await quem.save();
+  res.json(quem);
 });
 
 // ----------- CRUD Galeria -----------
 const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '../imagens'));
-    },
-    filename: function (req, file, cb) {
-        cb(null, Date.now() + '-' + file.originalname);
-    }
+  destination: (req, file, cb) => cb(null, 'uploads/'),
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
 });
 const upload = multer({ storage });
 
-app.get('/galeria', (req, res) => {
-    res.json(galeria);
-});
-app.post('/galeria', autenticar, upload.single('imagem'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'Imagem obrigatória.' });
-    }
-    const novaImagem = {
-        id: Date.now(),
-        url: `/imagens/${req.file.filename}`,
-        nome: req.file.originalname
-    };
-    galeria.push(novaImagem);
-    res.json(novaImagem);
-});
-app.put('/galeria/:id', autenticar, (req, res) => {
-    const { id } = req.params;
-    const { nome } = req.body;
-    const img = galeria.find(i => i.id == id);
-    if (!img) return res.status(404).json({ error: 'Imagem não encontrada.' });
-    if (!nome) return res.status(400).json({ error: 'Nome obrigatório.' });
-    img.nome = nome;
-    res.json(img);
-});
-app.delete('/galeria/:id', autenticar, (req, res) => {
-    const { id } = req.params;
-    const index = galeria.findIndex(img => img.id == id);
-    if (index === -1) return res.status(404).json({ error: 'Imagem não encontrada.' });
-    galeria.splice(index, 1);
-    res.json({ success: true });
+app.get('/galeria', async (req, res) => {
+  const imagens = await Galeria.find();
+  res.json(imagens);
 });
 
-// ----------- Servir imagens estaticamente -----------
-app.use('/imagens', express.static(path.join(__dirname, '../imagens')));
-
-// ----------- Alterar senha do admin -----------
-app.post('/alterar-senha', autenticar, (req, res) => {
-    const { novaSenha } = req.body;
-    if (!novaSenha || novaSenha.length < 6) {
-        return res.status(400).json({ error: 'Senha muito curta.' });
-    }
-    adminSenha = novaSenha;
-    res.json({ success: true });
+app.post('/galeria', autenticar, upload.single('imagem'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Imagem obrigatória.' });
+  const nome = req.body.nome || req.file.originalname;
+  const url = '/uploads/' + req.file.filename;
+  const novaImagem = await Galeria.create({ nome, url });
+  res.json(novaImagem);
 });
 
-// ----------- Contato (envio de e-mail) -----------
-app.post('/contato', async (req, res) => {
-    const { nome, email, mensagem } = req.body;
-    if (!nome || !email || !mensagem) {
-        return res.status(400).json({ error: 'Todos os campos são obrigatórios.' });
-    }
-    try {
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
-            }
-        });
-
-        await transporter.sendMail({
-            from: `"${nome}" <${email}>`,
-            to: process.env.EMAIL_USER,
-            subject: 'Contato pelo site',
-            text: mensagem
-        });
-
-        res.json({ success: true, message: 'Mensagem enviada com sucesso!' });
-    } catch (error) {
-        res.status(500).json({ error: 'Erro ao enviar mensagem.' });
-    }
+app.put('/galeria/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const { nome } = req.body;
+  const imagem = await Galeria.findById(id);
+  if (!imagem) return res.status(404).json({ error: 'Imagem não encontrada.' });
+  imagem.nome = nome;
+  await imagem.save();
+  res.json(imagem);
 });
 
-// ----------- Rota de teste -----------
-app.get('/', (req, res) => {
-    res.send('API da Escola Antonio Austregésio está rodando!');
+app.delete('/galeria/:id', autenticar, async (req, res) => {
+  const { id } = req.params;
+  const imagem = await Galeria.findByIdAndDelete(id);
+  if (!imagem) return res.status(404).json({ error: 'Imagem não encontrada.' });
+  res.json({ success: true });
 });
 
-// ----------- Iniciar servidor -----------
+// ----------- Inicialização -----------
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
+  console.log('Servidor rodando na porta', PORT);
 });
