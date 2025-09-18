@@ -46,6 +46,18 @@ function autenticar(req, res, next) {
   });
 }
 
+// ----------- Rota de Login -----------
+app.post('/login', async (req, res) => {
+  const { usuario, senha } = req.body;
+  // Troque pelos dados reais do admin
+  if (usuario === 'admin' && senha === 'patrick123') {
+    const token = jwt.sign({ usuario }, SECRET, { expiresIn: '2h' });
+    res.json({ token });
+  } else {
+    res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+  }
+});
+
 // ----------- CRUD Avisos -----------
 app.get('/avisos', async (req, res) => {
   const avisos = await Aviso.find();
