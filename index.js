@@ -4,10 +4,30 @@ const mongoose = require('mongoose');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const app = express();
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const bcrypt = require('bcrypt');
 
-app.use(cors({
-  origin: 'https://patrickavila.github.io'
-}));
+cloudinary.config({
+  cloud_name: 'devbhqkyu',
+  api_key: '686537133985625',
+  api_secret: 'XZlbRnVXE_4sqaVKHjXFaqogeyo'
+});
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'galeria-escola',
+    allowed_formats: ['jpg', 'png', 'jpeg']
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 } // Limite de 2MB por arquivo
+});
+
+app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
@@ -22,7 +42,7 @@ mongoose.connect('mongodb+srv://admin:patrick123@escola.qxidfn4.mongodb.net/?ret
 const avisoSchema = new mongoose.Schema({ titulo: String, texto: String });
 const Aviso = mongoose.model('Aviso', avisoSchema);
 
-const professorSchema = new mongoose.Schema({ nome: String, disciplina: String });
+const professorSchema = new mongoose.Schema({ nome: String, disciplina: String, foto: String });
 const Professor = mongoose.model('Professor', professorSchema);
 
 const destaqueSchema = new mongoose.Schema({ texto: String });
@@ -34,9 +54,12 @@ const QuemSomos = mongoose.model('QuemSomos', quemSomosSchema);
 const galeriaSchema = new mongoose.Schema({ nome: String, url: String });
 const Galeria = mongoose.model('Galeria', galeriaSchema);
 
+
 // ----------- Autenticação -----------
 const SECRET = 'sua-chave-secreta'; // Troque por uma chave forte
-
+app.get('/validar-token', autenticar, (req, res) => {
+  res.json({ success: true });
+});
 function autenticar(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth) return res.status(401).json({ error: 'Token ausente.' });
@@ -49,15 +72,32 @@ function autenticar(req, res, next) {
 }
 
 // ----------- Rota de Login -----------
+const adminSchema = new mongoose.Schema({
+  usuario: String,
+  senha: String
+});
+const Admin = mongoose.model('Admin', adminSchema);
+
 app.post('/login', async (req, res) => {
   const { usuario, senha } = req.body;
-  // Troque pelos dados reais do admin
-  if (usuario === 'admin' && senha === 'patrick123') {
+  const admin = await Admin.findOne({ usuario });
+  if (admin && await bcrypt.compare(senha, admin.senha)) {
     const token = jwt.sign({ usuario }, SECRET, { expiresIn: '2h' });
     res.json({ token });
   } else {
     res.status(401).json({ error: 'Usuário ou senha incorretos.' });
   }
+});
+
+// ----------- Rota de Alteração de Senha -----------
+app.post('/alterar-senha', autenticar, async (req, res) => {
+  const { novaSenha } = req.body;
+  const usuario = req.user.usuario;
+  const admin = await Admin.findOne({ usuario });
+  if (!admin) return res.status(404).json({ error: 'Admin não encontrado.' });
+  admin.senha = await bcrypt.hash(novaSenha, 10); // hash da senha
+  await admin.save();
+  res.json({ success: true });
 });
 
 // ----------- CRUD Avisos -----------
@@ -68,18 +108,29 @@ app.get('/avisos', async (req, res) => {
 
 app.post('/avisos', autenticar, async (req, res) => {
   const { titulo, texto } = req.body;
-  if (!titulo || !texto) return res.status(400).json({ error: 'Título e texto são obrigatórios.' });
-  const novoAviso = await Aviso.create({ titulo, texto });
+  if (!titulo || typeof titulo !== 'string' || titulo.trim().length < 3) {
+    return res.status(400).json({ error: 'Título inválido.' });
+  }
+  if (!texto || typeof texto !== 'string' || texto.trim().length < 3) {
+    return res.status(400).json({ error: 'Texto inválido.' });
+  }
+  const novoAviso = await Aviso.create({ titulo: titulo.trim(), texto: texto.trim() });
   res.json(novoAviso);
 });
 
 app.put('/avisos/:id', autenticar, async (req, res) => {
   const { id } = req.params;
   const { titulo, texto } = req.body;
+  if (!titulo || typeof titulo !== 'string' || titulo.trim().length < 3) {
+    return res.status(400).json({ error: 'Título inválido.' });
+  }
+  if (!texto || typeof texto !== 'string' || texto.trim().length < 3) {
+    return res.status(400).json({ error: 'Texto inválido.' });
+  }
   const aviso = await Aviso.findById(id);
   if (!aviso) return res.status(404).json({ error: 'Aviso não encontrado.' });
-  aviso.titulo = titulo;
-  aviso.texto = texto;
+  aviso.titulo = titulo.trim();
+  aviso.texto = texto.trim();
   await aviso.save();
   res.json(aviso);
 });
@@ -97,22 +148,35 @@ app.get('/professores', async (req, res) => {
   res.json(professores);
 });
 
-app.post('/professores', autenticar, async (req, res) => {
+app.post('/professores', autenticar, upload.single('foto'), async (req, res) => {
   const { nome, disciplina } = req.body;
-  if (!nome || !disciplina) return res.status(400).json({ error: 'Nome e disciplina são obrigatórios.' });
-  const novoProfessor = await Professor.create({ nome, disciplina });
+  if (!nome || typeof nome !== 'string' || nome.trim().length < 3) {
+    return res.status(400).json({ error: 'Nome inválido.' });
+  }
+  if (!disciplina || typeof disciplina !== 'string' || disciplina.trim().length < 3) {
+    return res.status(400).json({ error: 'Disciplina inválida.' });
+  }
+  let foto = '';
+  if (req.file) foto = req.file.path;
+  const novoProfessor = await Professor.create({ nome: nome.trim(), disciplina: disciplina.trim(), foto });
   res.json(novoProfessor);
 });
 
-app.put('/professores/:id', autenticar, async (req, res) => {
-  const { id } = req.params;
+app.put('/professores/:id', autenticar, upload.single('foto'), async (req, res) => {
   const { nome, disciplina } = req.body;
-  const professor = await Professor.findById(id);
-  if (!professor) return res.status(404).json({ error: 'Professor não encontrado.' });
-  professor.nome = nome;
-  professor.disciplina = disciplina;
-  await professor.save();
-  res.json(professor);
+  if (!nome || typeof nome !== 'string' || nome.trim().length < 3) {
+    return res.status(400).json({ error: 'Nome inválido.' });
+  }
+  if (!disciplina || typeof disciplina !== 'string' || disciplina.trim().length < 3) {
+    return res.status(400).json({ error: 'Disciplina inválida.' });
+  }
+  let update = { nome: nome.trim(), disciplina: disciplina.trim() };
+  if (req.file) {
+    update.foto = req.file.path; // Atualiza a foto se houver upload
+  }
+  const prof = await Professor.findByIdAndUpdate(req.params.id, update, { new: true });
+  if (!prof) return res.status(404).json({ error: 'Professor não encontrado.' });
+  res.json(prof);
 });
 
 app.delete('/professores/:id', autenticar, async (req, res) => {
@@ -130,17 +194,22 @@ app.get('/destaques', async (req, res) => {
 
 app.post('/destaques', autenticar, async (req, res) => {
   const { texto } = req.body;
-  if (!texto) return res.status(400).json({ error: 'Texto é obrigatório.' });
-  const novoDestaque = await Destaque.create({ texto });
+  if (!texto || typeof texto !== 'string' || texto.trim().length < 3) {
+    return res.status(400).json({ error: 'Texto do destaque inválido.' });
+  }
+  const novoDestaque = await Destaque.create({ texto: texto.trim() });
   res.json(novoDestaque);
 });
 
 app.put('/destaques/:id', autenticar, async (req, res) => {
   const { id } = req.params;
   const { texto } = req.body;
+  if (!texto || typeof texto !== 'string' || texto.trim().length < 3) {
+    return res.status(400).json({ error: 'Texto do destaque inválido.' });
+  }
   const destaque = await Destaque.findById(id);
   if (!destaque) return res.status(404).json({ error: 'Destaque não encontrado.' });
-  destaque.texto = texto;
+  destaque.texto = texto.trim();
   await destaque.save();
   res.json(destaque);
 });
@@ -161,39 +230,44 @@ app.get('/quem-somos', async (req, res) => {
 
 app.put('/quem-somos', autenticar, async (req, res) => {
   const { texto } = req.body;
+  if (!texto || typeof texto !== 'string' || texto.trim().length < 10) {
+    return res.status(400).json({ error: 'Texto muito curto para "Quem Somos".' });
+  }
   let quem = await QuemSomos.findOne();
-  if (!quem) quem = await QuemSomos.create({ texto });
-  else quem.texto = texto;
+  if (!quem) quem = await QuemSomos.create({ texto: texto.trim() });
+  else quem.texto = texto.trim();
   await quem.save();
   res.json(quem);
 });
 
 // ----------- CRUD Galeria -----------
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
-});
-const upload = multer({ storage });
-
 app.get('/galeria', async (req, res) => {
   const imagens = await Galeria.find();
   res.json(imagens);
 });
 
 app.post('/galeria', autenticar, upload.single('imagem'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Imagem obrigatória.' });
-  const nome = req.body.nome || req.file.originalname;
-  const url = '/uploads/' + req.file.filename;
-  const novaImagem = await Galeria.create({ nome, url });
+  const nome = req.body.nome || (req.file ? req.file.originalname : '');
+  if (!nome || typeof nome !== 'string' || nome.trim().length < 3) {
+    return res.status(400).json({ error: 'Nome da imagem inválido.' });
+  }
+  if (!req.file || !req.file.path) {
+    return res.status(400).json({ error: 'Imagem não enviada.' });
+  }
+  const url = req.file.path;
+  const novaImagem = await Galeria.create({ nome: nome.trim(), url });
   res.json(novaImagem);
 });
 
 app.put('/galeria/:id', autenticar, async (req, res) => {
   const { id } = req.params;
   const { nome } = req.body;
+  if (!nome || typeof nome !== 'string' || nome.trim().length < 3) {
+    return res.status(400).json({ error: 'Nome da imagem inválido.' });
+  }
   const imagem = await Galeria.findById(id);
   if (!imagem) return res.status(404).json({ error: 'Imagem não encontrada.' });
-  imagem.nome = nome;
+  imagem.nome = nome.trim();
   await imagem.save();
   res.json(imagem);
 });

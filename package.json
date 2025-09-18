@@ -16,7 +16,9 @@
   "author": "Patrick Avila",
   "license": "ISC",
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "body-parser": "^1.20.2",
+    "cloudinary": "^1.41.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
@@ -24,6 +26,7 @@
     "mongodb": "^5.7.0",
     "mongoose": "^8.18.1",
     "multer": "^2.0.2",
+    "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^7.0.5"
   }
 }
