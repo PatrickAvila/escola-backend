@@ -54,6 +54,8 @@ const QuemSomos = mongoose.model('QuemSomos', quemSomosSchema);
 const galeriaSchema = new mongoose.Schema({ nome: String, url: String });
 const Galeria = mongoose.model('Galeria', galeriaSchema);
 
+const videoSchema = new mongoose.Schema({  nome: String,  url: String,  data: { type: Date, default: Date.now }});
+const Video = mongoose.model('Video', videoSchema);
 
 // ----------- Autenticação -----------
 const SECRET = 'sua-chave-secreta'; // Troque por uma chave forte
@@ -276,6 +278,36 @@ app.delete('/galeria/:id', autenticar, async (req, res) => {
   const { id } = req.params;
   const imagem = await Galeria.findByIdAndDelete(id);
   if (!imagem) return res.status(404).json({ error: 'Imagem não encontrada.' });
+  res.json({ success: true });
+});
+
+// ----------- CRUD Vídeos -----------
+
+// Listar vídeos
+app.get('/videos', async (req, res) => {
+  const videos = await Video.find().sort({ data: -1 });
+  res.json(videos);
+});
+
+// Adicionar vídeo (upload ou YouTube)
+app.post('/videos', autenticar, upload.single('video'), async (req, res) => {
+  const nome = req.body.nome || (req.file ? req.file.originalname : '');
+  let url = '';
+  if (req.file && req.file.path) {
+    url = req.file.path;
+  } else if (req.body.youtube) {
+    url = req.body.youtube;
+  } else {
+    return res.status(400).json({ error: 'Nenhum vídeo enviado.' });
+  }
+  const novoVideo = await Video.create({ nome, url });
+  res.json(novoVideo);
+});
+
+// Excluir vídeo
+app.delete('/videos/:id', autenticar, async (req, res) => {
+  const video = await Video.findByIdAndDelete(req.params.id);
+  if (!video) return res.status(404).json({ error: 'Vídeo não encontrado.' });
   res.json({ success: true });
 });
 
