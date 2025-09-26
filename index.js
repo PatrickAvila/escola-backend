@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -54,7 +55,7 @@ const QuemSomos = mongoose.model('QuemSomos', quemSomosSchema);
 const galeriaSchema = new mongoose.Schema({ nome: String, url: String });
 const Galeria = mongoose.model('Galeria', galeriaSchema);
 
-const videoSchema = new mongoose.Schema({  nome: String,  url: String,  data: { type: Date, default: Date.now }});
+const videoSchema = new mongoose.Schema({ nome: String, url: String, data: { type: Date, default: Date.now } });
 const Video = mongoose.model('Video', videoSchema);
 
 // ----------- Autenticação -----------
@@ -315,4 +316,40 @@ app.delete('/videos/:id', autenticar, async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log('Servidor rodando na porta', PORT);
+});
+
+
+// ----------- Envio Email -----------
+const nodemailer = require('nodemailer');
+
+// Configuração do transporte (exemplo usando Gmail)
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
+
+app.post('/contato', async (req, res) => {
+  const { nome, email, mensagem } = req.body;
+  if (!nome || !email || !mensagem) {
+    return res.status(400).json({ error: 'Preencha todos os campos.' });
+  }
+
+  try {
+    await transporter.sendMail({
+      from: `"${nome}" <${email}>`,
+      //email da escola
+      to: process.env.EMAIL_TO,
+      subject: 'Contato pelo site',
+      text: mensagem,
+      html: `<p><strong>Nome:</strong> ${nome}</p>
+             <p><strong>E-mail:</strong> ${email}</p>
+             <p><strong>Mensagem:</strong><br>${mensagem}</p>`
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao enviar e-mail.' });
+  }
 });
