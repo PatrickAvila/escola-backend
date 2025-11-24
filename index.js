@@ -98,7 +98,7 @@ app.use(express.urlencoded({ extended: true, limit: '12kb' }));
 app.use(mongoSanitize());
 app.use(xss());
 
-// CORS: parse FRONTEND_URL (aceita lista separada por vírgula) e inclui hosts dev
+// CORS manual: parse FRONTEND_URL (aceita lista separada por vírgula) e inclui hosts dev
 const envFront = process.env.FRONTEND_URL || '';
 const allowedOrigins = envFront
   .split(',')
@@ -106,26 +106,23 @@ const allowedOrigins = envFront
   .filter(Boolean)
   .concat(['http://localhost:5500', 'http://127.0.0.1:5500']);
 
-// log para confirmar no deploy
 console.log('CORS allowed origins:', allowedOrigins);
 
-const corsOptionsDelegate = (req, callback) => {
-  const origin = req.header('Origin');
-  // sem Origin (server-to-server, curl) -> permitir (origin: false deixa o header ausente)
-  if (!origin) return callback(null, { origin: false });
-  if (allowedOrigins.includes(origin)) {
-    return callback(null, {
-      origin: true,
-      credentials: true,
-      allowedHeaders: ['Content-Type', 'Authorization']
-    });
+// middleware CORS explícito — garante resposta ao preflight e define headers corretamente
+app.use((req, res, next) => {
+  const origin = req.get('Origin');
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   }
-  // origem não permitida -> não setar header (navegador bloqueará)
-  return callback(null, { origin: false });
-};
-
-app.use(cors(corsOptionsDelegate));
-app.options('*', cors(corsOptionsDelegate));
+  if (req.method === 'OPTIONS') {
+    // responde o preflight diretamente
+    return res.status(204).end();
+  }
+  next();
+});
 
 // Ensure preflight responds for allowed origins
 app.options('*', cors({
