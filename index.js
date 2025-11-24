@@ -98,22 +98,34 @@ app.use(express.urlencoded({ extended: true, limit: '12kb' }));
 app.use(mongoSanitize());
 app.use(xss());
 
-// CORS whitelist (inclui localhost e 127.0.0.1 para dev)
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:5500',
-  'http://127.0.0.1:5500'
-];
+// CORS: parse FRONTEND_URL (aceita lista separada por vírgula) e inclui hosts dev
+const envFront = process.env.FRONTEND_URL || '';
+const allowedOrigins = envFront
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean)
+  .concat(['http://localhost:5500', 'http://127.0.0.1:5500']);
 
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // server-to-server or curl
-    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true);
-    return callback(new Error('Origin not allowed by CORS'));
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
+// log para confirmar no deploy
+console.log('CORS allowed origins:', allowedOrigins);
+
+const corsOptionsDelegate = (req, callback) => {
+  const origin = req.header('Origin');
+  // sem Origin (server-to-server, curl) -> permitir (origin: false deixa o header ausente)
+  if (!origin) return callback(null, { origin: false });
+  if (allowedOrigins.includes(origin)) {
+    return callback(null, {
+      origin: true,
+      credentials: true,
+      allowedHeaders: ['Content-Type', 'Authorization']
+    });
+  }
+  // origem não permitida -> não setar header (navegador bloqueará)
+  return callback(null, { origin: false });
+};
+
+app.use(cors(corsOptionsDelegate));
+app.options('*', cors(corsOptionsDelegate));
 
 // Ensure preflight responds for allowed origins
 app.options('*', cors({
@@ -140,9 +152,19 @@ const contatoLimiter = rateLimit({
 app.use('/contato', contatoLimiter);
 
 // MongoDB connection
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+const mongoUri = process.env.MONGO_URI;
+if (!mongoUri) {
+  console.error('FATAL: MONGO_URI não definido. Configure a variável de ambiente MONGO_URI no provedor (Render/Heroku/VPS).');
+  // opcional: rotacionar/fechar app para evitar comportamento indefinido
+  process.exit(1);
+}
+
+mongoose.connect(mongoUri, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log('Conectado ao MongoDB Atlas!'))
-  .catch((err) => console.error('Erro ao conectar ao MongoDB:', err));
+  .catch((err) => {
+    console.error('Erro ao conectar ao MongoDB:', err);
+    process.exit(1);
+  });
 
 // ----------- Models -----------
 const avisoSchema = new mongoose.Schema({ titulo: String, texto: String });
