@@ -1,7 +1,7 @@
 {
   "name": "site-escola",
   "version": "1.0.0",
-  "description": "Backend do site da Escola Antonio Austregésio",
+  "description": "Backend do site da Escola Antônio Austregésio",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
