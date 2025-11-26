@@ -148,6 +148,15 @@ const contatoLimiter = rateLimit({
 });
 app.use('/contato', contatoLimiter);
 
+// Health check endpoint (leve, sem queries ao DB)
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'ok', 
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
 // MongoDB connection
 const mongoUri = process.env.MONGO_URI;
 if (!mongoUri) {
