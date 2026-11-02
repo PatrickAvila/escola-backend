@@ -17,6 +17,8 @@ const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const nodemailer = require('nodemailer');
 
+app.set('trust proxy', 1);
+
 // Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_NAME,
@@ -66,39 +68,8 @@ const uploadVideo = multer({
   fileFilter: videoFileFilter
 });
 
-// Global rate limiter
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { error: 'Muitas requisições. Tente novamente mais tarde.' }
-});
-app.use(limiter);
-
-// Security headers and hardening
-app.disable('x-powered-by');
-app.use(helmet({
-  contentSecurityPolicy: {
-    useDefaults: true,
-    directives: {
-      "default-src": ["'self'"],
-      "script-src": ["'self'", "https://www.google.com/recaptcha/", "https://www.gstatic.com/"],
-      "frame-src": ["'self'", "https://www.youtube.com", "https://www.google.com/recaptcha/"],
-      "img-src": ["'self'", "data:", "https://res.cloudinary.com"],
-      "style-src": ["'self'", "'unsafe-inline'"]
-    }
-  },
-  hsts: { maxAge: 31536000, includeSubDomains: true }
-}));
-
-// Body size limits (mitigar DoS por payload grande)
-app.use(express.json({ limit: '12kb' }));
-app.use(express.urlencoded({ extended: true, limit: '12kb' }));
-
-// Sanitization
-app.use(mongoSanitize());
-app.use(xss());
-
 // CORS manual: parse FRONTEND_URL (aceita lista separada por vírgula) e inclui hosts dev
+// Definido ANTES do rate limit para que respostas 429 também carreguem os headers CORS
 const envFront = process.env.FRONTEND_URL || '';
 const allowedOrigins = envFront
   .split(',')
@@ -131,27 +102,69 @@ app.options('*', cors({
   credentials: true
 }));
 
+// Rate limit é ignorado apenas quando a requisição é feita ao próprio servidor local (desenvolvimento)
+const isLocalRequest = (req) => ['localhost', '127.0.0.1', '::1'].includes(req.hostname);
+
+// Global rate limiter
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Muitas requisições. Tente novamente mais tarde.' },
+  skip: isLocalRequest
+});
+app.use(limiter);
+
+// Security headers and hardening
+app.disable('x-powered-by');
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      "default-src": ["'self'"],
+      "script-src": ["'self'", "https://www.google.com/recaptcha/", "https://www.gstatic.com/"],
+      "frame-src": ["'self'", "https://www.youtube.com", "https://www.google.com/recaptcha/"],
+      "img-src": ["'self'", "data:", "https://res.cloudinary.com"],
+      "style-src": ["'self'", "'unsafe-inline'"]
+    }
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true }
+}));
+
+// Body size limits (mitigar DoS por payload grande)
+app.use(express.json({ limit: '12kb' }));
+app.use(express.urlencoded({ extended: true, limit: '12kb' }));
+
+// Sanitization
+app.use(mongoSanitize());
+app.use(xss());
+
 app.use('/uploads', express.static('uploads'));
 
 // Rate limiters for sensitive routes
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 6,
-  message: { error: 'Muitas tentativas de login. Tente novamente mais tarde.' }
+  message: { error: 'Muitas tentativas de login. Tente novamente mais tarde.' },
+  skip: isLocalRequest
 });
 app.use('/login', loginLimiter);
 
 const contatoLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
-  message: { error: 'Muitas mensagens. Tente novamente mais tarde.' }
+  message: { error: 'Muitas mensagens. Tente novamente mais tarde.' },
+  skip: isLocalRequest
 });
 app.use('/contato', contatoLimiter);
 
 // Health check endpoint (leve, sem queries ao DB)
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'ok', 
+  const databaseConnected = mongoose.connection.readyState === 1;
+  res.status(databaseConnected ? 200 : 503).json({
+    status: databaseConnected ? 'ok' : 'unavailable',
+    database: databaseConnected ? 'connected' : 'disconnected',
     uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
@@ -179,7 +192,7 @@ const Aviso = mongoose.model('Aviso', avisoSchema);
 const professorSchema = new mongoose.Schema({ nome: String, disciplina: String, foto: String });
 const Professor = mongoose.model('Professor', professorSchema);
 
-const destaqueSchema = new mongoose.Schema({ texto: String });
+const destaqueSchema = new mongoose.Schema({ texto: String, icone: String });
 const Destaque = mongoose.model('Destaque', destaqueSchema);
 
 const quemSomosSchema = new mongoose.Schema({ texto: String });
@@ -195,11 +208,18 @@ const adminSchema = new mongoose.Schema({ usuario: String, senha: String });
 const Admin = mongoose.model('Admin', adminSchema);
 
 // ----------- Auth helper -----------
-const SECRET = process.env.JWT_SECRET || 'mudar-essa-chave';
+const SECRET = process.env.JWT_SECRET;
+if (!SECRET) {
+  console.error('FATAL: JWT_SECRET não definido. Configure um segredo forte nas variáveis de ambiente.');
+  process.exit(1);
+}
+
 function autenticar(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth) return res.status(401).json({ error: 'Token ausente.' });
-  const token = auth.split(' ')[1];
+  const match = auth.match(/^Bearer\s+(\S+)$/i);
+  if (!match) return res.status(401).json({ error: 'Token inválido.' });
+  const token = match[1];
   jwt.verify(token, SECRET, (err, decoded) => {
     if (err) return res.status(401).json({ error: 'Token inválido.' });
     req.user = decoded;
@@ -212,18 +232,21 @@ app.get('/validar-token', autenticar, (req, res) => res.json({ success: true }))
 // ----------- Login -----------
 app.post('/login',
   body('usuario').isString().isLength({ min: 3, max: 50 }).trim().escape(),
-  body('senha').isString().isLength({ min: 3, max: 100 }).trim(),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  body('senha').isString().isLength({ min: 3, max: 100 }),
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { usuario, senha } = req.body;
-    const admin = await Admin.findOne({ usuario });
-    if (admin && await bcrypt.compare(senha, admin.senha)) {
-      const token = jwt.sign({ usuario }, SECRET, { expiresIn: '2h' });
-      res.json({ token });
-    } else {
-      res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+      const { usuario, senha } = req.body;
+      const admin = await Admin.findOne({ usuario });
+      if (admin && await bcrypt.compare(senha, admin.senha)) {
+        const token = jwt.sign({ usuario }, SECRET, { expiresIn: '2h' });
+        return res.json({ token });
+      }
+      return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+    } catch (err) {
+      next(err);
     }
   }
 );
@@ -231,18 +254,22 @@ app.post('/login',
 // ----------- Alterar senha -----------
 app.post('/alterar-senha',
   autenticar,
-  body('novaSenha').isString().isLength({ min: 6, max: 100 }).trim(),
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  body('novaSenha').isString().isLength({ min: 6, max: 100 }),
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { novaSenha } = req.body;
-    const usuario = req.user.usuario;
-    const admin = await Admin.findOne({ usuario });
-    if (!admin) return res.status(404).json({ error: 'Admin não encontrado.' });
-    admin.senha = await bcrypt.hash(novaSenha, 10);
-    await admin.save();
-    res.json({ success: true });
+      const { novaSenha } = req.body;
+      const usuario = req.user.usuario;
+      const admin = await Admin.findOne({ usuario });
+      if (!admin) return res.status(404).json({ error: 'Admin não encontrado.' });
+      admin.senha = await bcrypt.hash(novaSenha, 10);
+      await admin.save();
+      return res.json({ success: true });
+    } catch (err) {
+      next(err);
+    }
   }
 );
 
@@ -354,12 +381,13 @@ app.get('/destaques', async (req, res, next) => {
 app.post('/destaques',
   autenticar,
   body('texto').isString().isLength({ min: 3, max: 300 }).trim().escape(),
+  body('icone').optional().isString().isLength({ max: 8 }).trim(),
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-      const { texto } = req.body;
-      const novo = await Destaque.create({ texto });
+      const { texto, icone } = req.body;
+      const novo = await Destaque.create({ texto, icone });
       res.json(novo);
     } catch (err) { next(err); }
   }
@@ -426,7 +454,7 @@ app.get('/galeria', async (req, res, next) => {
 app.post('/galeria',
   autenticar,
   upload.single('imagem'),
-  body('nome').isString().isLength({ min: 3, max: 100 }).trim().escape(),
+  body('nome').optional().isString().isLength({ min: 3, max: 100 }).trim().escape(),
   async (req, res, next) => {
     try {
       const errors = validationResult(req);
@@ -513,31 +541,55 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-app.post('/contato', async (req, res, next) => {
-  try {
-    const { nome, email, mensagem, recaptchaToken } = req.body;
-    if (!nome || !email || !mensagem || !recaptchaToken) {
-      return res.status(400).json({ error: 'Preencha todos os campos e marque o reCAPTCHA.' });
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  })[character]);
+}
+
+app.post('/contato',
+  body('nome').isString().trim().isLength({ min: 2, max: 100 }),
+  body('email').isEmail().normalizeEmail(),
+  body('mensagem').isString().trim().isLength({ min: 3, max: 5000 }),
+  body('recaptchaToken').isString().notEmpty(),
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+      const { nome, email, mensagem, recaptchaToken } = req.body;
+      const secret = process.env.RECAPTCHA_SECRET;
+      if (!secret) return res.status(503).json({ error: 'O formulário de contato está indisponível no momento.' });
+
+      const resposta = await fetch('https://www.google.com/recaptcha/api/siteverify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ secret, response: recaptchaToken })
+      });
+      if (!resposta.ok) throw new Error('Falha ao validar o reCAPTCHA.');
+      const resultado = await resposta.json();
+      if (!resultado.success) return res.status(400).json({ error: 'Falha na validação do reCAPTCHA.' });
+
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        replyTo: email,
+        to: process.env.EMAIL_TO,
+        subject: 'Contato pelo site',
+        text: mensagem,
+        html: `<p><strong>Nome:</strong> ${escapeHtml(nome)}</p>
+               <p><strong>E-mail:</strong> ${escapeHtml(email)}</p>
+               <p><strong>Mensagem:</strong><br>${escapeHtml(mensagem).replace(/\n/g, '<br>')}</p>`
+      });
+      return res.json({ success: true });
+    } catch (err) {
+      next(err);
     }
-
-    const secret = process.env.RECAPTCHA_SECRET;
-    const verifyUrl = `https://www.google.com/recaptcha/api/siteverify?secret=${secret}&response=${recaptchaToken}`;
-    const resposta = await fetch(verifyUrl, { method: 'POST' });
-    const resultado = await resposta.json();
-    if (!resultado.success) return res.status(400).json({ error: 'Falha na validação do reCAPTCHA.' });
-
-    await transporter.sendMail({
-      from: `"${nome}" <${email}>`,
-      to: process.env.EMAIL_TO,
-      subject: 'Contato pelo site',
-      text: mensagem,
-      html: `<p><strong>Nome:</strong> ${nome}</p>
-             <p><strong>E-mail:</strong> ${email}</p>
-             <p><strong>Mensagem:</strong><br>${mensagem}</p>`
-    });
-    res.json({ success: true });
-  } catch (err) { next(err); }
-});
+  }
+);
 
 // ----------- Global error handler -----------
 app.use((err, req, res, next) => {
