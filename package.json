@@ -33,5 +33,10 @@
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^10.3.1",
     "xss-clean": "^0.1.4"
+  },
+  "overrides": {
+    "multer-storage-cloudinary": {
+      "cloudinary": "$cloudinary"
+    }
   }
 }
