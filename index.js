@@ -524,6 +524,26 @@ app.post('/videos',
   }
 );
 
+app.put('/videos/:id',
+  autenticar,
+  body('nome').optional().isString().isLength({ min: 3, max: 100 }).trim().escape(),
+  body('descricao').optional().isString().isLength({ max: 500 }).trim().escape(),
+  body('youtube').optional().isURL().trim(),
+  async (req, res, next) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const video = await Video.findById(req.params.id);
+      if (!video) return res.status(404).json({ error: 'Vídeo não encontrado.' });
+      if (req.body.nome) video.nome = req.body.nome;
+      if (req.body.descricao !== undefined) video.descricao = req.body.descricao;
+      if (req.body.youtube) video.url = req.body.youtube;
+      await video.save();
+      res.json(video);
+    } catch (err) { next(err); }
+  }
+);
+
 app.delete('/videos/:id', autenticar, async (req, res, next) => {
   try {
     const video = await Video.findByIdAndDelete(req.params.id);
